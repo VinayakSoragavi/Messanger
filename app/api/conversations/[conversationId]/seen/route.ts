@@ -1,61 +1,89 @@
 import { NextResponse } from "next/server";
 
+import { pusherServer } from '@/app/libs/pusher'
 import prisma from "@/app/libs/Prismadb";
-import { pusherServer } from "@/app/libs/pusher";
 import getCurrentUser from "@/app/action/getCurrentUser";
 
 interface IParams {
   conversationId?: string;
 }
 
-export async function DELETE(
+export async function POST(
+  request: Request,
   { params }: { params: IParams }
 ) {
   try {
-    const { conversationId } = params;
     const currentUser = await getCurrentUser();
+    const {
+      conversationId
+    } = params;
 
-    if (!currentUser?.id) {
-      console.error('Current user not found');
-      return NextResponse.json(null);
+    
+    if (!currentUser?.id || !currentUser?.email) {
+      return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const existingConversation = await prisma.conversation.findUnique({
+    // Find existing conversation
+    const conversation = await prisma.conversation.findUnique({
       where: {
-        id: conversationId
+        id: conversationId,
       },
       include: {
-        users: true
-      }
+        messages: {
+          include: {
+            seen: true
+          },
+        },
+        users: true,
+      },
     });
 
-    if (!existingConversation) {
-      console.error('Invalid conversation ID:', conversationId);
+    if (!conversation) {
       return new NextResponse('Invalid ID', { status: 400 });
     }
 
-    console.log('Existing Conversation:', existingConversation);
+    // Find last message
+    const lastMessage = conversation.messages[conversation.messages.length - 1];
 
-    const deletedConversation = await prisma.conversation.deleteMany({
+    if (!lastMessage) {
+      return NextResponse.json(conversation);
+    }
+
+    // Update seen of last message
+    const updatedMessage = await prisma.message.update({
       where: {
-        id: conversationId,
-        userIds: {
-          hasSome: [currentUser.id]
-        },
+        id: lastMessage.id
       },
-    });
-
-    console.log('Deleted Conversation:', deletedConversation);
-
-    existingConversation.users.forEach((user) => {
-      if (user.email) {
-        pusherServer.trigger(user.email, 'conversation:remove', existingConversation);
+      include: {
+        sender: true,
+        seen: true,
+      },
+      data: {
+        seen: {
+          connect: {
+            id: currentUser.id
+          }
+        }
       }
     });
 
-    return NextResponse.json(deletedConversation);
+    // Update all connections with new seen
+    await pusherServer.trigger(currentUser.email, 'conversation:update', {
+      id: conversationId,
+      messages: [updatedMessage]
+    });
+
+    // If user has already seen the message, no need to go further
+    if (lastMessage.seenIds.indexOf(currentUser.id) !== -1) {
+      return NextResponse.json(conversation);
+    }
+
+    // Update last message seen
+    await pusherServer.trigger(conversationId!, 'message:update', updatedMessage);
+
+    return new NextResponse('Success');
   } catch (error) {
-    console.error('Error:', error);
-    return NextResponse.json(null);
+    console.log(error, 'ERROR_MESSAGES_SEEN')
+    return new NextResponse('Error', { status: 500 });
   }
 }
