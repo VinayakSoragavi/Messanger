@@ -146,7 +146,7 @@ const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
                                 "
                                   >
                                     {data.users
-                                      .map((user) => user.email)
+                                      .map((user: any) => user.email)
                                       .join(", ")}
                                   </dd>
                                 </div>

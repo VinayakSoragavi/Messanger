@@ -99,7 +99,7 @@ export async function POST(
     });
 
     // Update all connections with new conversation
-    newConversation.users.map((user) => {
+    newConversation.users.map((user:any) => {
       if (user.email) {
         pusherServer.trigger(user.email, 'conversation:new', newConversation);
       }
